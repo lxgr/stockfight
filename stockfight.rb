@@ -5,9 +5,9 @@ require 'httparty'
 require 'json'
 require_relative 'sfconfig'
 
-$account = "KAD93918909"
-$venue = "DFCTEX"
-$stock = "ARM"
+$account = "ORB14433792"
+$venue = "ETANEX"
+$stock = "ARE"
 
 class TxList
     def initialize
@@ -112,8 +112,9 @@ class StockClient
     end 
 
     def cancel_order(order)
-        response = HTTParty.delete("#{Base_url}/venues/#{$venue}/stocks/#{$stock}/orders/#{order.id}", :headers => {"X-Starfighter-Authorization" => $apikey})
+        response = HTTParty.delete("#{Base_url}/venues/#{@venue}/stocks/#{@stock}/orders/#{order.id}", :headers => {"X-Starfighter-Authorization" => $apikey})
         raise "Error deleting!" unless response.code.between?(200,300)
+        handle_result(order, response)
     end
         
     private
@@ -161,7 +162,7 @@ class Order
 
     def update!
         raise "Not yet posted!" if @status == :prepared
-        #return if @status == :done
+        return if @status == :closed
         @client.update_order(self)
     end
 
@@ -212,11 +213,11 @@ if __FILE__ == $0
 # Trivial market-making bot
 
     client = StockClient.new($apikey, $account, $venue, $stock)
-    last = client.quote.last
     inv = 0
     maxinv = 300
 
     while true do
+        last = client.quote.last
         spread = (last/100)-4
         bid = last-(spread/2)
         ask = last+(spread/2)
@@ -234,19 +235,7 @@ if __FILE__ == $0
             obid.update!
             oask.update!
 
-            # Did someone buy?
-            if (oask.nfilled > 0 && obid.nfilled > 0)
-                puts "We bought AND sold at #{last}, keeping it as it is"
-                break
-            end
-            if (oask.nfilled > 0)
-                last = oask.closest_fill
-                puts "We bought at #{last}"
-                break
-            end
-            if (obid.nfilled > 0)
-                last = obid.closest_fill
-                puts "We sold at #{last}"
+            if (oask.nfilled > 0 || obid.nfilled > 0)
                 break
             end
         end
