@@ -3,20 +3,24 @@
 require 'rubygems'
 require 'httparty'
 require 'json'
+require_relative 'sfconfig'
 
-$base_url = "https://api.stockfighter.io/ob/api"
-$account = "SAP44392652"
-$venue = "WMOPEX"
-$stock = "XOPO"
-$db
+$account = "KAD93918909"
+$venue = "DFCTEX"
+$stock = "ARM"
 
-class TxDb
+class TxList
     def initialize
         @orders = []
     end
 
     def insert(order)
         @orders << order
+        return order
+    end
+
+    def remove(order)
+        return @orders.delete(order)
     end
 
     def update_all!
@@ -62,15 +66,10 @@ end
 
 class Quote
 
-    attr_reader :bid, :ask, :last
-
-    def initialize
-        @data = JSON.parse(HTTParty.get("#{$base_url}/venues/#{$venue}/stocks/#{$stock}/quote",
-                            :headers => {"X-Starfighter-Authorization" => $apikey}).body)
-        @bid = @data["bid"]
-        @ask = @data["ask"]
-        @last = @data["last"]
-    end 
+    attr_accessor :bid, :ask, :last
+    @bid
+    @ask
+    @last
 
     def spread
         return @ask-@bid
@@ -78,11 +77,77 @@ class Quote
 
 end
 
+class StockClient
+
+    Base_url = "https://api.stockfighter.io/ob/api"
+    
+    def initialize(apikey, account, venue, stock)
+        @apikey = apikey
+        @account = account
+        @venue = venue
+        @stock = stock
+    end
+
+    def quote
+        response = JSON.parse(HTTParty.get("#{Base_url}/venues/#{$venue}/stocks/#{$stock}/quote", :headers => {"X-Starfighter-Authorization" => $apikey}).body)
+        q = Quote.new
+        q.bid = response["bid"]
+        q.ask = response["ask"]
+        q.last = response["last"]
+        return q
+    end
+        
+
+    def post_order(order)
+        response = HTTParty.post("#{Base_url}/venues/#{@venue}/stocks/#{@stock}/orders",
+                    :body => order_to_json(order),
+                    :headers => {"X-Starfighter-Authorization" => @apikey})
+        handle_result(order, response)
+    end
+
+    def update_order(order)
+        response = HTTParty.get("#{Base_url}/venues/#{@venue}/stocks/#{@stock}/orders/#{order.id}", :headers => {"X-Starfighter-Authorization" => @apikey})
+        raise "Error updating!" unless response.code.between?(200,300)
+        handle_result(order, response)
+    end 
+
+    def cancel_order(order)
+        response = HTTParty.delete("#{Base_url}/venues/#{$venue}/stocks/#{$stock}/orders/#{order.id}", :headers => {"X-Starfighter-Authorization" => $apikey})
+        raise "Error deleting!" unless response.code.between?(200,300)
+    end
+        
+    private
+
+    def handle_result(order, response)
+        result = JSON.parse(response.body)
+        order.handle_response!(validate_response(result))
+    end
+
+    def validate_response(response)
+        # TODO: Check if all required fields are there
+        return response
+    end
+    
+    def order_to_json(order)
+        json = {
+          "account" => @account,
+          "venue" => order.venue,
+          "symbol" => order.symbol,
+          "price" => order.limit,
+          "qty" => order.amount,
+          "direction" => order.direction,
+          "orderType" => order.type
+        }
+        return JSON.generate(json)
+    end
+end
+
 class Order
 
-        attr_reader :nfilled, :direction, :limit
+        attr_reader :nfilled, :direction, :limit, :amount, :type, :symbol, :venue, :id
 
-    def initialize(amount, limit = 0, direction = "buy", type = "market")
+    def initialize(client, amount, limit = 0, direction = "buy", type = "market")
+        @client = client
         @symbol = $stock
         @venue = $venue
         @amount = amount
@@ -97,47 +162,18 @@ class Order
     def update!
         raise "Not yet posted!" if @status == :prepared
         #return if @status == :done
-        response = HTTParty.get("#{$base_url}/venues/#{$venue}/stocks/#{$stock}/orders/#{@id}", :headers => {"X-Starfighter-Authorization" => $apikey})
-        raise "Error updating!" unless response.code == 200
-        handle_update!(JSON.parse(response.body))
-    end
-
-    def postOrder(json)
-        response = HTTParty.post("#{$base_url}/venues/#{$venue}/stocks/#{$stock}/orders",
-                    :body => json,
-                    :headers => {"X-Starfighter-Authorization" => $apikey})
-        return response.body
-    end
-
-    def to_json
-        json = {
-          "account" => $account,
-          "venue" => @venue,
-          "symbol" => @symbol,
-          "price" => @limit,
-          "qty" => @amount,
-          "direction" => @direction,
-          "orderType" => @type
-        }
-        return JSON.generate(json)
+        @client.update_order(self)
     end
 
     def post!
         raise "Already posted!" if @status != :prepared
-        result = postOrder(to_json)
-        response = JSON.parse(result)
-        @id = response["id"]
-        handle_response!(response)
-        $db.insert self
+        @client.post_order(self)
     end
 
     def cancel!
         return if @status != :open
-        response = HTTParty.delete("#{$base_url}/venues/#{$venue}/stocks/#{$stock}/orders/#{@id}",
-                    :headers => {"X-Starfighter-Authorization" => $apikey})
-        handle_response! response
+        @client.cancel_order(self)
     end
-
 
     def is_open?
         return @status == :open
@@ -155,36 +191,28 @@ class Order
         return inspect
     end
 
-    private 
-
-    def handle_response!(response)
-        raise "Rejected TX" if !response["ok"]
-        handle_update! response
-    end
-
-    def handle_update!(resp)
+    def handle_response!(resp)
         raise "Missing status" unless resp.has_key?("open")
         if resp["open"]
             @status = :open
         else
             @status = :closed
         end
-        
         @nfilled = resp["totalFilled"]
         @fills = resp["fills"]
-    end
+        @id = resp["id"]
+    end 
 
 end
 
-$db = TxDb.new
+$db = TxList.new
 
 
 if __FILE__ == $0
 # Trivial market-making bot
 
-    size = 10
-    q = Quote.new
-    last = q.last
+    client = StockClient.new($apikey, $account, $venue, $stock)
+    last = client.quote.last
     inv = 0
     maxinv = 300
 
@@ -195,8 +223,8 @@ if __FILE__ == $0
         nbid = [1,maxinv + inv].max
         nask = [1,maxinv - inv].max
         puts "Bid #{nbid}@#{bid}, ask #{nask}@#{ask} – @spread #{ask-bid}"
-        obid = Order.new(nbid, bid, "sell", "limit")
-        oask = Order.new(nask, bid, "buy", "limit")
+        obid = Order.new(client, nbid, bid, "sell", "limit")
+        oask = Order.new(client, nask, bid, "buy", "limit")
         obid.post!
         oask.post!
 
