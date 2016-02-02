@@ -5,9 +5,9 @@ require 'httparty'
 require 'json'
 require_relative 'sfconfig'
 
-$account = "ORB14433792"
-$venue = "ETANEX"
-$stock = "ARE"
+$account = "TAC75576728"
+$venue = "MHEDEX"
+$stock = "UONX"
 
 class TxList
     def initialize
@@ -27,19 +27,27 @@ class TxList
         @orders.map(&:update!)
     end
 
+    def post_all!
+        @orders.map(&:post!)
+    end
+
     def cancel_all!
-        @orders.each do |o| o.cancel! end
+        @orders.map(&:cancel!)
     end
 
     def sum_all(orders, method)
         orders.inject(0){|sum,o| sum += o.send method}
     end
 
-    def total_fills(orders)
+    def total_fills
+        return total_fills_for(@orders)
+    end
+
+    def total_fills_for(orders)
         return sum_all(orders, :nfilled)
     end
 
-    def total_value(orders)
+    def total_value_for(orders)
         return sum_all(orders, :filled_value)
     end
 
@@ -52,11 +60,11 @@ class TxList
     end
 
     def pos_shares
-        return total_fills(buys)-total_fills(sells)
+        return total_fills_for(buys)-total_fills_for(sells)
     end
 
     def pos_money
-        return total_value(sells)-total_value(buys)
+        return total_value_for(sells)-total_value_for(buys)
     end
 
     def to_s
@@ -217,33 +225,33 @@ if __FILE__ == $0
     maxinv = 300
 
     while true do
+        open = TxList.new
         last = client.quote.last
         spread = (last/100)-4
         bid = last-(spread/2)
         ask = last+(spread/2)
-        nbid = [1,maxinv + inv].max
-        nask = [1,maxinv - inv].max
+        nask = [0,maxinv + inv].max
+        nbid = [0,maxinv - inv].max
         puts "Bid #{nbid}@#{bid}, ask #{nask}@#{ask} – @spread #{ask-bid}"
-        obid = Order.new(client, nbid, bid, "sell", "limit")
-        oask = Order.new(client, nask, bid, "buy", "limit")
-        obid.post!
-        oask.post!
+        if (nbid > 0)
+            open.insert(Order.new(client, nbid, bid, "buy", "limit"))
+        end
+        if (nask > 0)
+            open.insert(Order.new(client, nask, ask, "sell", "limit"))
+        end
+        open.post_all!
 
-        recalc = false
         while true do
+            # TODO: We can probably get stuck here! Timeout?
             sleep 1
-            obid.update!
-            oask.update!
-
-            if (oask.nfilled > 0 || obid.nfilled > 0)
+            open.update_all!
+            if (open.total_fills > 0)
                 break
             end
         end
 
-        obid.cancel!
-        oask.cancel!
-        inv += oask.nfilled
-        inv -= obid.nfilled
+        open.cancel_all!
+        inv += open.pos_shares
 
         puts "Current inv: #{inv}"
         if inv.abs > 2*maxinv
