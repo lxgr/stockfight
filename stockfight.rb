@@ -5,9 +5,9 @@ require 'httparty'
 require 'json'
 require_relative 'sfconfig'
 
-$account = "TAC75576728"
-$venue = "MHEDEX"
-$stock = "UONX"
+$account = "YAN34122142"
+$venue = "GFDEX"
+$stock = "HNH"
 
 class TxList
     def initialize
@@ -230,8 +230,8 @@ if __FILE__ == $0
         spread = (last/100)-4
         bid = last-(spread/2)
         ask = last+(spread/2)
-        nask = [0,maxinv + inv].max
-        nbid = [0,maxinv - inv].max
+        nask = [1,maxinv + inv].max
+        nbid = [1,maxinv - inv].max
         puts "Bid #{nbid}@#{bid}, ask #{nask}@#{ask} – @spread #{ask-bid}"
         if (nbid > 0)
             open.insert(Order.new(client, nbid, bid, "buy", "limit"))
