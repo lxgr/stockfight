@@ -43,12 +43,32 @@ class TxList
         return total_fills_for(@orders)
     end
 
+    def has_buy_fills
+        return total_fills_for(buys) > 0
+    end
+
+    def has_sell_fills
+        return total_fills_for(sells) > 0
+    end
+
     def total_fills_for(orders)
         return sum_all(orders, :nfilled)
     end
 
     def total_value_for(orders)
         return sum_all(orders, :filled_value)
+    end
+
+    def avg_fill
+        return total_value_for(@orders)/total_fills_for(@orders)
+    end
+
+    def best_buy_fill
+        return buys.map(&:closest_fill).min
+    end
+
+    def best_sell_fill
+        return sells.map(&:closest_fill).max
     end
 
     def buys
@@ -223,10 +243,10 @@ if __FILE__ == $0
     client = StockClient.new($apikey, $account, $venue, $stock)
     inv = 0
     maxinv = 300
+    last = client.quote.last
 
     while true do
         open = TxList.new
-        last = client.quote.last
         spread = (last/100)-4
         bid = last-(spread/2)
         ask = last+(spread/2)
@@ -242,7 +262,9 @@ if __FILE__ == $0
         open.post_all!
 
         while true do
-            # TODO: We can probably get stuck here! Timeout?
+            # As we always have at least one order for each side on the book,
+            # we are guaranteed to find out about any price moves.
+            # (But not about market makers with a narrower spread...)
             sleep 1
             open.update_all!
             if (open.total_fills > 0)
@@ -252,6 +274,10 @@ if __FILE__ == $0
 
         open.cancel_all!
         inv += open.pos_shares
+
+        # The new mid price is the weighted average of all executed
+        # transactions for the outstanding orders.
+        last = open.avg_fill
 
         puts "Current inv: #{inv}"
         if inv.abs > 2*maxinv
